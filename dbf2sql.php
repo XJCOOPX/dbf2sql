@@ -23,7 +23,6 @@ $destdirOption = new Option('d', 'destinationdir', Getopt::REQUIRED_ARGUMENT);
 $getopt = new Getopt([$encOption, $batchOption, $destdirOption]);
 $getopt->parse();
 $encoding = $getopt["encoding"] ? $getopt["encoding"] : "UTF-8";
-$batchSize = $getopt["batchsize"] ? $getopt["batchsize"] : 1000;
 $destDir = $getopt["destinationdir"] ? $getopt["destinationdir"] : false;
 $operands = $getopt->getOperands();
 
@@ -43,11 +42,11 @@ foreach ($operands as $sourcefile) {
     $destinationfile = ($destDir ? $destDir : $pathInfo['dirname']) . "/" . $pathInfo['filename'] . ".sql";
     $destination = fopen($destinationfile, 'w');
     $source = new Table($sourcefile, null, $encoding);
-
+    $batchSize = $source->getRecordCount();
     echo "Processing " . $source->getRecordCount() . " records from file $sourcefile to $destinationfile using $encoding encoding\n";
 
     $tableName = basename(strtolower($source->getName()), ".dbf");
-    $createString = "CREATE TABLE " . escName($tableName) . " (\n";
+    $createString = "CREATE TABLE " . escName($tableName) . "( \n";
     foreach ($source->getColumns() as $column) {
         $type = mapTypeToSql($column->getType(), $column->getLength(), $column->getDecimalCount());
         if (($column->getType() == Record::DBFFIELD_TYPE_MEMO)
@@ -57,20 +56,21 @@ foreach ($operands as $sourcefile) {
         }
         $createString .= "\t" . escName($column->getName()) . " $type,\n";
     }
-    $createString = substr($createString, 0, -2) . "\n) CHARACTER SET utf8 COLLATE utf8_unicode_ci;\n\n";
+    $createString = substr($createString, 0, -2) . "\n ) \n\n";
     fwrite($destination, $createString);
 
     $rows = 0;
+
     while ($record = $source->nextRecord()) {
         if ($record->isDeleted()) {
             continue;
         }
         if ($rows == 0) {
-            $insertLine = "INSERT INTO " . escName($tableName) . " VALUES \n";
+            $insertLine = "INSERT INTO " . escName($tableName) . "\n";
         } else {
-            $insertLine .= ",\n";
+            $insertLine .= " \n";
         }
-        $row = "\t(";
+        $row = "\t SELECT ";
         foreach ($source->getColumns() as $column) {
             $type = mapTypeToSql($column->getType(), $column->getLength(), $column->getDecimalCount());
             if (($column->getType() == Record::DBFFIELD_TYPE_MEMO)
@@ -82,16 +82,17 @@ foreach ($operands as $sourcefile) {
             if (($column->getType() == Record::DBFFIELD_TYPE_DATETIME) && $cell) {
                 $cell = date('Y-m-d H:i:s', $cell-3600);
             }
-            $row .= "\"" . addslashes($cell) . "\",";
+            $row .= "'" . addslashes($cell) . "',";
         }
-        $row = substr($row, 0, -1) . ")";
-        $insertLine .= $row;
+        $row = substr($row, 0, -1);
+
         if ($rows + 1 == $batchSize) {
-            $insertLine .= ";\n\n";
+            $insertLine .= $row. " FROM DUAL;";
             $rows = 0;
             fwrite($destination, $insertLine);
             $insertLine = "";
         } else {
+            $insertLine .= $row. " FROM DUAL UNION ALL";
             $rows++;
         }
     }
@@ -107,12 +108,12 @@ function mapTypeToSql($type_short, $length, $decimal)
 {
     $types = [
         Record::DBFFIELD_TYPE_MEMO => "TEXT",                        // Memo type field
-        Record::DBFFIELD_TYPE_CHAR => "VARCHAR($length)",            // Character field
+        Record::DBFFIELD_TYPE_CHAR => "VARCHAR2($length)",            // Character field
         Record::DBFFIELD_TYPE_DOUBLE => "DOUBLE($length,$decimal)",  // Double
-        Record::DBFFIELD_TYPE_NUMERIC => "INTEGER",                  // Numeric
+        Record::DBFFIELD_TYPE_NUMERIC => "NUMBER",                  // Numeric
         Record::DBFFIELD_TYPE_FLOATING => "FLOAT($length,$decimal)", // Floating point
         Record::DBFFIELD_TYPE_DATE => "DATE",                        // Date
-        Record::DBFFIELD_TYPE_LOGICAL => "TINYINT(1)",               // Logical - ? Y y N n T t F f (? when not initialized).
+        Record::DBFFIELD_TYPE_LOGICAL => "BOOLEAN",               // Logical - ? Y y N n T t F f (? when not initialized).
         Record::DBFFIELD_TYPE_DATETIME => "DATETIME",                // DateTime
         Record::DBFFIELD_TYPE_INDEX => "INTEGER",                    // Index
     ];
@@ -125,5 +126,5 @@ function mapTypeToSql($type_short, $length, $decimal)
 
 function escName($name)
 {
-    return "`" . $name . "`";
+    return $name;
 }
